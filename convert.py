@@ -118,9 +118,10 @@ saturation = float(ask_with_default("Color saturation? (higher = more vivid)", "
 
 # Ask for date display preferences
 print("\n----- Date Display Settings -----")
-show_date = (
+original_show_date = (
     ask_with_default("Print date on images?", "yes", ["yes", "no"]).lower() == "yes"
 )
+show_date = original_show_date
 
 # Only ask for date display details if the user wants dates
 if show_date:
@@ -228,6 +229,11 @@ if TQDM_AVAILABLE:
 
 for input_filename in image_files:
     try:
+        # Reset date_str and show_date for each new image
+        date_str = None
+        # Reset to the user's original preference for each image
+        show_date = original_show_date
+
         # Read input image
         input_image = Image.open(input_filename)
 
@@ -329,97 +335,200 @@ for input_filename in image_files:
         enhanced_image = enhanced_image.filter(ImageFilter.SHARPEN)
 
         # Try to extract date from EXIF data - only if user wants date display
-        date_str = None
         if show_date:
             try:
-                # Check if it's a HEIC file
-                is_heic = input_filename.lower().endswith((".heic"))
+                # Regular EXIF processing for non-HEIC files
+                try:
+                    # Try to get EXIF data - focusing only on the most reliable fields for Date Taken
+                    # Tag 36867 (0x9003) = DateTimeOriginal - Standard "Date Taken" field
+                    # Tag 306 (0x132) = DateTime - Standard create date field
+                    # Tag 36868 (0x9004) = DateTimeDigitized - When image was scanned/digitized
+                    # Tag 40091 = XPDateTaken - Microsoft's Windows-specific tag
 
-                if is_heic and HEIC_SUPPORT:
-                    # For HEIC files, we'll use file modification time
-                    # The pillow-heif API is complex and may change between versions
-                    try:
-                        # Get file modification time as a reliable fallback
-                        file_time = os.path.getmtime(input_filename)
-                        file_date = datetime.datetime.fromtimestamp(file_time)
-                        date_str = file_date.strftime("%Y-%m-%d")
-                        conditional_print(
-                            f"Using file modification time for HEIC: {date_str}"
-                        )
-                    except Exception as e:
-                        conditional_print(
-                            f"Error getting file time for HEIC file {input_filename}: {e}"
-                        )
-                else:
-                    # Regular EXIF processing for non-HEIC files
-                    try:
-                        # Try to get EXIF data safely
-                        exif = None
+                    date_str = None
 
-                        # Check if the image has the _getexif attribute
-                        if hasattr(input_image, "_getexif"):
-                            try:
-                                exif = input_image._getexif()
-                            except Exception as exif_err:
-                                conditional_print(
-                                    f"Error reading EXIF data: {exif_err}"
-                                )
-                        else:
-                            conditional_print(
-                                f"Image {input_filename} doesn't support EXIF data extraction"
-                            )
-
+                    # Get EXIF data - first try _getexif() (works in most cases)
+                    if hasattr(input_image, "_getexif"):
+                        exif = input_image._getexif()
                         if exif:
-                            # Try different date tags with their names for reference
-                            exif_date_tags = {
-                                36867: "DateTimeOriginal",
-                                306: "DateTime",
-                                36868: "DateTimeDigitized",
-                                37520: "SubsecTime",
-                                37521: "SubsecTimeOriginal",
-                                37522: "SubsecTimeDigitized",
-                                50971: "PreviewDateTime",
-                                # Add custom Microsoft tags
-                                40091: "XPDateTaken",
-                                40092: "DateAcquired",
-                            }
+                            # Simple priority list for date fields (most to least reliable)
+                            date_fields = [
+                                (36867, "DateTimeOriginal"),  # Standard date taken
+                                (40091, "XPDateTaken"),  # Windows-specific date taken
+                                (306, "DateTime"),  # File creation date
+                                (36868, "DateTimeDigitized"),  # When digitized
+                            ]
 
-                            # Check for date in standard EXIF tags
-                            for tag, tag_name in exif_date_tags.items():
-                                if tag in exif and exif[tag]:
-                                    raw_date = str(exif[tag])
-                                    conditional_print(
-                                        f"Found date in {tag_name}: {raw_date}"
-                                    )
+                            # Try each field in order of reliability
+                            for tag_id, tag_name in date_fields:
+                                if date_str:
+                                    break  # Exit once we have a date
 
-                                    # Handle different date formats
-                                    # Standard format: "YYYY:MM:DD HH:MM:SS"
+                                if tag_id in exif and exif[tag_id]:
+                                    raw_date = str(exif[tag_id])
+                                    conditional_print(f"Found {tag_name}: {raw_date}")
+
+                                    # Handle date format based on separator
                                     if ":" in raw_date and len(raw_date) >= 10:
                                         date_str = raw_date[:10].replace(":", "-")
-                                        break
-                                    # Microsoft format might be different
                                     elif "-" in raw_date and len(raw_date) >= 10:
                                         date_str = raw_date[:10]
-                                        break
-                    except Exception as e:
-                        conditional_print(
-                            f"Error in EXIF processing for {input_filename}: {e}"
+
+                    # If the above method failed, try newer getexif() method (Pillow 6.0+)
+                    if not date_str and hasattr(input_image, "getexif"):
+                        try:
+                            exif = input_image.getexif()
+                            if exif:
+                                # Try the same tags with the newer API
+                                if 36867 in exif and exif[36867]:  # DateTimeOriginal
+                                    raw_date = str(exif[36867])
+                                    if ":" in raw_date and len(raw_date) >= 10:
+                                        date_str = raw_date[:10].replace(":", "-")
+                                elif 306 in exif and exif[306]:  # DateTime
+                                    raw_date = str(exif[306])
+                                    if ":" in raw_date and len(raw_date) >= 10:
+                                        date_str = raw_date[:10].replace(":", "-")
+                        except Exception:
+                            pass  # Silently continue if this method fails
+
+                    # If no date was found in EXIF, don't show date
+                    if not date_str:
+                        conditional_print(f"No Date Taken found for {input_filename}")
+                        show_date = False
+                except Exception as e:
+                    conditional_print(f"Error extracting date: {e}")
+                    show_date = False
+
+                # If date was found and user wants to show it, add it to the image BEFORE quantization
+                if date_str and show_date:
+                    # Create a drawing context
+                    draw = ImageDraw.Draw(enhanced_image)
+                    # Try to use a default font, fallback to default if not available
+                    try:
+                        # Use smaller font size as requested
+                        font_size = date_size
+                        try:
+                            font = ImageFont.truetype("arial.ttf", font_size)
+                        except:
+                            try:
+                                font = ImageFont.truetype("DejaVuSans.ttf", font_size)
+                            except:
+                                font = ImageFont.load_default()
+                    except IOError:
+                        # If no TrueType fonts available, use default
+                        font = ImageFont.load_default()
+
+                    # Calculate position (bottom right with padding)
+                    text_width = draw.textlength(date_str, font=font)
+
+                    # Use different padding for horizontal and vertical to make box shorter
+                    h_padding = 8  # Horizontal padding (left/right)
+                    v_padding_top = 2  # Reduced top padding by 1px
+                    v_padding_bottom = 3  # Keep bottom padding unchanged
+
+                    # Calculate height with asymmetric padding
+                    rect_width = text_width + h_padding * 2
+                    rect_height = font_size + v_padding_top + v_padding_bottom
+
+                    # Position the rectangle in the bottom right corner
+                    # Move rect_y down by 1px to reduce the box from the top
+                    rect_x = enhanced_image.width - rect_width - 10
+                    rect_y = enhanced_image.height - rect_height - 10
+
+                    # Set background color based on user preference - define BEFORE using it
+                    bg_color = (0, 0, 128)  # Default to dark blue
+                    if date_color == "black":
+                        bg_color = (0, 0, 0)
+                    elif date_color == "blue":
+                        bg_color = (0, 0, 128)  # Dark blue
+                    elif date_color == "green":
+                        bg_color = (0, 80, 0)  # Dark green
+                    elif date_color == "red":
+                        bg_color = (128, 0, 0)  # Dark red
+
+                    # Create rounded rectangle for background
+                    # Use smaller corner radius for smaller height
+                    corner_radius = min(
+                        6, int(rect_height // 2.5)
+                    )  # Adjusted ratio, max 6px
+
+                    # Create a transparent image and draw a rounded rectangle
+                    rounded_rect = Image.new(
+                        "RGBA", (int(rect_width), int(rect_height)), (0, 0, 0, 0)
+                    )
+                    rect_draw = ImageDraw.Draw(rounded_rect)
+
+                    # Draw the rectangle with rounded corners
+                    # Use try/except for compatibility with older Pillow versions
+                    try:
+                        # For newer Pillow versions that support rounded_rectangle
+                        rect_draw.rounded_rectangle(
+                            [(0, 0), (rect_width - 1, rect_height - 1)],
+                            fill=bg_color + (200,),  # Add alpha for semi-transparency
+                            radius=corner_radius,
+                        )
+                    except AttributeError:
+                        # Fallback for older Pillow versions - draw rectangle and circles for corners
+                        # Draw main rectangle
+                        rect_draw.rectangle(
+                            [
+                                (corner_radius, 0),
+                                (rect_width - corner_radius - 1, rect_height - 1),
+                            ],
+                            fill=bg_color + (200,),
+                        )
+                        rect_draw.rectangle(
+                            [
+                                (0, corner_radius),
+                                (rect_width - 1, rect_height - corner_radius - 1),
+                            ],
+                            fill=bg_color + (200,),
                         )
 
-                # If no date found from any source, use file modification time
-                if not date_str:
-                    try:
-                        file_time = os.path.getmtime(input_filename)
-                        file_date = datetime.datetime.fromtimestamp(file_time)
-                        date_str = file_date.strftime("%Y-%m-%d")
-                        conditional_print(f"Using file modification time: {date_str}")
-                    except Exception as e:
-                        conditional_print(f"Error getting file modification time: {e}")
-                        # Last resort - use today's date
-                        date_str = datetime.datetime.now().strftime("%Y-%m-%d")
-                        conditional_print(
-                            f"Using current date as last resort: {date_str}"
+                        # Draw four corner circles
+                        rect_draw.ellipse(
+                            [(0, 0), (corner_radius * 2, corner_radius * 2)],
+                            fill=bg_color + (200,),
                         )
+                        rect_draw.ellipse(
+                            [
+                                (rect_width - corner_radius * 2 - 1, 0),
+                                (rect_width - 1, corner_radius * 2),
+                            ],
+                            fill=bg_color + (200,),
+                        )
+                        rect_draw.ellipse(
+                            [
+                                (0, rect_height - corner_radius * 2 - 1),
+                                (corner_radius * 2, rect_height - 1),
+                            ],
+                            fill=bg_color + (200,),
+                        )
+                        rect_draw.ellipse(
+                            [
+                                (
+                                    rect_width - corner_radius * 2 - 1,
+                                    rect_height - corner_radius * 2 - 1,
+                                ),
+                                (rect_width - 1, rect_height - 1),
+                            ],
+                            fill=bg_color + (200,),
+                        )
+
+                    # Paste the rounded rectangle onto the main image
+                    enhanced_image.paste(
+                        rounded_rect, (int(rect_x), int(rect_y)), rounded_rect
+                    )
+
+                    # Calculate text position to center it in the box
+                    text_x = rect_x + h_padding
+                    # Keep text at the same position as before, equivalent to the old centering formula
+                    text_y = rect_y + (rect_height - font_size) // 2 - 1
+
+                    # Draw text in white
+                    draw.text(
+                        (text_x, text_y), date_str, fill=(255, 255, 255), font=font
+                    )
             except (AttributeError, KeyError, TypeError, ValueError) as e:
                 conditional_print(f"Error extracting date from {input_filename}: {e}")
                 # Use file modification time as fallback
@@ -432,131 +541,6 @@ for input_filename in image_files:
                     )
                 except Exception:
                     pass
-
-        # If date was found and user wants to show it, add it to the image BEFORE quantization
-        if date_str and show_date:
-            # Create a drawing context
-            draw = ImageDraw.Draw(enhanced_image)
-            # Try to use a default font, fallback to default if not available
-            try:
-                # Use smaller font size as requested
-                font_size = date_size
-                try:
-                    font = ImageFont.truetype("arial.ttf", font_size)
-                except:
-                    try:
-                        font = ImageFont.truetype("DejaVuSans.ttf", font_size)
-                    except:
-                        font = ImageFont.load_default()
-            except IOError:
-                # If no TrueType fonts available, use default
-                font = ImageFont.load_default()
-
-            # Calculate position (bottom right with padding)
-            text_width = draw.textlength(date_str, font=font)
-
-            # Use different padding for horizontal and vertical to make box shorter
-            h_padding = 8  # Horizontal padding (left/right)
-            v_padding_top = 2  # Reduced top padding by 1px
-            v_padding_bottom = 3  # Keep bottom padding unchanged
-
-            # Calculate height with asymmetric padding
-            rect_width = text_width + h_padding * 2
-            rect_height = font_size + v_padding_top + v_padding_bottom
-
-            # Position the rectangle in the bottom right corner
-            # Move rect_y down by 1px to reduce the box from the top
-            rect_x = enhanced_image.width - rect_width - 10
-            rect_y = enhanced_image.height - rect_height - 10
-
-            # Set background color based on user preference - define BEFORE using it
-            bg_color = (0, 0, 128)  # Default to dark blue
-            if date_color == "black":
-                bg_color = (0, 0, 0)
-            elif date_color == "blue":
-                bg_color = (0, 0, 128)  # Dark blue
-            elif date_color == "green":
-                bg_color = (0, 80, 0)  # Dark green
-            elif date_color == "red":
-                bg_color = (128, 0, 0)  # Dark red
-
-            # Create rounded rectangle for background
-            # Use smaller corner radius for smaller height
-            corner_radius = min(6, int(rect_height // 2.5))  # Adjusted ratio, max 6px
-
-            # Create a transparent image and draw a rounded rectangle
-            rounded_rect = Image.new(
-                "RGBA", (int(rect_width), int(rect_height)), (0, 0, 0, 0)
-            )
-            rect_draw = ImageDraw.Draw(rounded_rect)
-
-            # Draw the rectangle with rounded corners
-            # Use try/except for compatibility with older Pillow versions
-            try:
-                # For newer Pillow versions that support rounded_rectangle
-                rect_draw.rounded_rectangle(
-                    [(0, 0), (rect_width - 1, rect_height - 1)],
-                    fill=bg_color + (200,),  # Add alpha for semi-transparency
-                    radius=corner_radius,
-                )
-            except AttributeError:
-                # Fallback for older Pillow versions - draw rectangle and circles for corners
-                # Draw main rectangle
-                rect_draw.rectangle(
-                    [
-                        (corner_radius, 0),
-                        (rect_width - corner_radius - 1, rect_height - 1),
-                    ],
-                    fill=bg_color + (200,),
-                )
-                rect_draw.rectangle(
-                    [
-                        (0, corner_radius),
-                        (rect_width - 1, rect_height - corner_radius - 1),
-                    ],
-                    fill=bg_color + (200,),
-                )
-
-                # Draw four corner circles
-                rect_draw.ellipse(
-                    [(0, 0), (corner_radius * 2, corner_radius * 2)],
-                    fill=bg_color + (200,),
-                )
-                rect_draw.ellipse(
-                    [
-                        (rect_width - corner_radius * 2 - 1, 0),
-                        (rect_width - 1, corner_radius * 2),
-                    ],
-                    fill=bg_color + (200,),
-                )
-                rect_draw.ellipse(
-                    [
-                        (0, rect_height - corner_radius * 2 - 1),
-                        (corner_radius * 2, rect_height - 1),
-                    ],
-                    fill=bg_color + (200,),
-                )
-                rect_draw.ellipse(
-                    [
-                        (
-                            rect_width - corner_radius * 2 - 1,
-                            rect_height - corner_radius * 2 - 1,
-                        ),
-                        (rect_width - 1, rect_height - 1),
-                    ],
-                    fill=bg_color + (200,),
-                )
-
-            # Paste the rounded rectangle onto the main image
-            enhanced_image.paste(rounded_rect, (int(rect_x), int(rect_y)), rounded_rect)
-
-            # Calculate text position to center it in the box
-            text_x = rect_x + h_padding
-            # Keep text at the same position as before, equivalent to the old centering formula
-            text_y = rect_y + (rect_height - font_size) // 2 - 1
-
-            # Draw text in white
-            draw.text((text_x, text_y), date_str, fill=(255, 255, 255), font=font)
 
         # Create a palette object with exact display colors
         # (Black, White, Green, Blue, Red, Yellow)
