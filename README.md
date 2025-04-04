@@ -2,7 +2,7 @@
 
 A image conversion tool that processes photos for e-ink displays with enhanced visual quality build for Photo Painter Frame / screen
 https://www.waveshare.com/wiki/PhotoPainter_%28B%29
-https://github.com/myevit/PhotoPainter_B
+Enhanced firmwareis here https://github.com/myevit/PhotoPainter_B
 
 ## Features
 
