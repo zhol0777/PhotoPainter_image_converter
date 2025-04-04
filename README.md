@@ -1,8 +1,10 @@
 # Image Converter
 
-A image conversion tool that processes photos for e-ink displays with enhanced visual quality build for Photo Painter Frame / screen
-https://www.waveshare.com/wiki/PhotoPainter_%28B%29
-Enhanced firmwareis here https://github.com/myevit/PhotoPainter_B
+A image conversion tool that processes photos for e-ink displays with enhanced visual quality specifically for the Photo Painter (B) e-paper frame.
+
+## Links
+- Photo Painter (B) product information: https://www.waveshare.com/wiki/PhotoPainter_%28B%29
+- Enhanced firmware repository: https://github.com/myevit/PhotoPainter_B/blob/master/README.md
 
 ## Features
 
