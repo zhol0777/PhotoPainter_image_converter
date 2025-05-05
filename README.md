@@ -1,5 +1,32 @@
 # Image Converter
 
+```
+usage: convert.py [-h] [--orientation {portrait,landscape,both}] [-icv {scale,cut}] [--dithering-algorithm {0,3}] [--brightness BRIGHTNESS]
+                  [--contrast CONTRAST] [--saturation SATURATION] [--show-date] [--date-color {black,blue,green,red}]
+                  [--date-size DATE_SIZE] [--delete-old-images]
+
+Prepare images in working directory for display on WaveShare PhotoPaper.
+
+options:
+  -h, --help            show this help message and exit
+  --orientation {portrait,landscape,both}
+                        (default: both)
+  -icv, --image-conversion-mode {scale,cut}
+                        (default: cut)
+  --dithering-algorithm {0,3}
+                        (default: Image.Dither.FLOYDSTEINBERG (3))
+  --brightness BRIGHTNESS
+                        (default: 1.2)
+  --contrast CONTRAST   (default: 1.4)
+  --saturation SATURATION
+                        (default: 1.3)
+  --show-date
+  --date-color {black,blue,green,red}
+  --date-size DATE_SIZE
+                        (default: 10)
+  --delete-old-images
+```
+
 A image conversion tool that processes photos for e-ink displays with enhanced visual quality specifically for the Photo Painter (B) e-paper frame.
 
 ## Links
@@ -20,30 +47,10 @@ A image conversion tool that processes photos for e-ink displays with enhanced v
 
 ## Setup
 
-### Using Conda (Recommended)
-
-1. Clone or download this repository
-2. Install [Miniconda](https://docs.conda.io/en/latest/miniconda.html) or [Anaconda](https://www.anaconda.com/download/)
-3. Open your terminal/command prompt
-4. Navigate to the project directory
-5. Create the environment using the provided `environment.yml` file:
+### Manual Setup (preferably with a venv)
 
 ```bash
-conda env create -f environment.yml
-```
-
-6. Activate the environment:
-
-```bash
-conda activate conv
-```
-
-### Manual Setup (Alternative)
-
-If you don't want to use conda, install the required packages manually:
-
-```bash
-pip install pillow pillow-heif tqdm pyinstaller
+pip install pillow pillow-heif tqdm
 ```
 
 ## Usage
@@ -54,33 +61,12 @@ Run the script directly:
 python convert.py
 ```
 
-The script will guide you through the following options:
-- Select orientation (portrait, landscape, or both)
-- Choose conversion mode (scale or cut)
-- Set enhancement levels (brightness, contrast, saturation)
-- Configure date display options
-
 Converted images will be saved in a `pic/` subfolder.
-
-## Building Executable
-
-To create a standalone executable that can run on any Windows PC (without Python):
-
-```bash
-# Activate the conda environment first
-conda activate conv
-
-# Build the executable
-pyinstaller --onefile --name ImageConverter --noconfirm convert.py
-```
-
-The executable will be created in the `dist/` folder. You can share `ImageConverter.exe` with anyone - no Python installation required!
 
 ## Notes
 
-- HEIC support requires the pillow-heif library, which is included in the conda environment
+- HEIC support requires the pillow-heif library
 - For best results on e-ink displays, use the default enhancement settings
-- The progress bar requires the tqdm library
 
 ## License
 

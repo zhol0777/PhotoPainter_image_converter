@@ -1,2 +1,8 @@
+.venv
+.vscode
+.DS_Store
+fileList.txt
+
 build/
 dist/
+pic/
