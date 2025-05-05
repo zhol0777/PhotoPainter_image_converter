@@ -1,9 +1,9 @@
 # Image Converter
 
 ```
-usage: convert.py [-h] [--orientation {portrait,landscape,both}] [-icv {scale,cut}] [--dithering-algorithm {0,3}] [--brightness BRIGHTNESS]
-                  [--contrast CONTRAST] [--saturation SATURATION] [--show-date] [--date-color {black,blue,green,red}]
-                  [--date-size DATE_SIZE] [--delete-old-images]
+usage: convert.py [-h] [--orientation {portrait,landscape,both}] [-icv {scale,cut}] [--dithering-algorithm {0,3}] [--brightness BRIGHTNESS] [--contrast CONTRAST]
+                  [--saturation SATURATION] [--show-date] [--date-color {black,blue,green,red}] [--date-size DATE_SIZE] [--delete-old-images] [--disk-path DISK_PATH]
+                  [--photos-path PHOTOS_PATH]
 
 Prepare images in working directory for display on WaveShare PhotoPaper.
 
@@ -25,6 +25,10 @@ options:
   --date-size DATE_SIZE
                         (default: 10)
   --delete-old-images
+  --disk-path DISK_PATH
+                        Where to place output files (sd card is recommended)
+  --photos-path PHOTOS_PATH
+                        Directory where photos are located
 ```
 
 A image conversion tool that processes photos for e-ink displays with enhanced visual quality specifically for the Photo Painter (B) e-paper frame.

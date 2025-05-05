@@ -3,6 +3,7 @@
 from typing import Any, Union
 import argparse
 import glob
+import mimetypes
 import os
 import sys
 
@@ -32,6 +33,8 @@ def parse_args():
     parser.add_argument('--delete-old-images', action='store_true', default=False)
     parser.add_argument('--disk-path', default='.',
                         help='Where to place output files (sd card is recommended)')
+    parser.add_argument('--photos-path', default='.',
+                        help='Directory where photos are located')
     return parser.parse_args()
 
 
@@ -200,13 +203,13 @@ def apply_date_to_image(input_image: Image.Image, enhanced_image: Image.Image,
 
 
 def main():
+    mimetypes.init()
     args = parse_args()
 
     # Create pic/ subfolder if it doesn't exist
     output_dir = os.path.join(args.disk_path, PICTURE_SUBFOLDER)
     if not os.path.exists(output_dir):
-        os.makedirs(output_dir
-)
+        os.makedirs(output_dir)
     else:
         if args.delete_old_images:
             # remove all files in this directory
@@ -217,13 +220,12 @@ def main():
                     print('Failed to delete %s. Reason: %s' % (filename, e))
 
     # Get all image files in current directory
-    supported_formats = ["*.jpg", "*.jpeg", "*.png", "*.bmp", "*.gif", "*.tiff"]
-    if has_heic_support():
-        supported_formats.append("*.heic")
-        supported_formats.append("*.HEIC")
     image_files = []
-    for format in supported_formats:
-        image_files.extend(glob.glob(format))
+    for entry in os.scandir(args.photos_path):
+        if entry.is_file():
+            if guessed_type := mimetypes.guess_type(entry.name)[0]:
+                if 'image' in guessed_type:
+                    image_files.append(entry.path)
 
     if not image_files:
         print("No image files found in the current directory")
