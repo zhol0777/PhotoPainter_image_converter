@@ -1,6 +1,6 @@
 # encoding: utf-8
 
-from typing import Any
+from typing import Any, Union
 import argparse
 import glob
 import os
@@ -10,30 +10,35 @@ from PIL import Image, ImageOps, ImageEnhance, ImageFilter, ImageDraw, ImageFont
 from tqdm import tqdm
 
 EXIF_DATE_FIELD_NAMES = ["DateTimeOriginal", "DateTimeDigitized", "DateTime", "XPDateTaken"]
+PICTURE_SUBFOLDER = "pic"
 
 
 def parse_args():
-    # Create an ArgumentParser object for minimal required arguments
-    parser = argparse.ArgumentParser(description="Process some images.")
+    parser = argparse.ArgumentParser(description="Prepare images in working directory for display "
+                                                 "on WaveShare PhotoPaper.")
     parser.add_argument('--orientation', choices=['portrait', 'landscape', 'both'],
-                        default='both')
-    parser.add_argument('-icv', '--image-conversion-mode', choices=['scale', 'cut'], default='cut')
+                        default='both', help='(default: both)')
+    parser.add_argument('-icv', '--image-conversion-mode', choices=['scale', 'cut'], default='cut',
+                        help='(default: cut)')
     parser.add_argument('--dithering-algorithm', default=Image.Dither.FLOYDSTEINBERG, type=int,
-                        choices=[Image.Dither.NONE, Image.Dither.FLOYDSTEINBERG],)
-    parser.add_argument('--brightness', type=float, default=1.2)
-    parser.add_argument('--contrast', type=float, default=1.4)
-    parser.add_argument('--saturation', type=float, default=1.3)
+                        choices=[Image.Dither.NONE, Image.Dither.FLOYDSTEINBERG],
+                        help='(default: Image.Dither.FLOYDSTEINBERG (3))')
+    parser.add_argument('--brightness', type=float, default=1.2, help='(default: 1.2)')
+    parser.add_argument('--contrast', type=float, default=1.4, help='(default: 1.4)')
+    parser.add_argument('--saturation', type=float, default=1.3, help='(default: 1.3)')
     parser.add_argument('--show-date', action='store_true', default=False)
     parser.add_argument('--date-color', choices=['black', 'blue', 'green', 'red'], default='blue')
-    parser.add_argument('--date-size', type=int, default=10)
+    parser.add_argument('--date-size', type=int, default=10, help='(default: 10)')
     parser.add_argument('--delete-old-images', action='store_true', default=False)
+    parser.add_argument('--disk-path', default='.',
+                        help='Where to place output files (sd card is recommended)')
     return parser.parse_args()
 
 
-def has_heic_support() -> None:
+def has_heic_support() -> bool:
     # Try to import pillow-heif for HEIC support
     try:
-        import pillow_heif
+        import pillow_heif  # type: ignore
         pillow_heif.register_heif_opener()
         return True
     except ImportError:
@@ -42,17 +47,16 @@ def has_heic_support() -> None:
     return False
 
 
-def extract_exif_data(input_image: Image) -> dict[str, Any]:
+def extract_exif_data(input_image: Image.Image) -> dict[str, Any]:
+    '''Assign human-readable keys to replace EXIF magic numbers '''
     rebuilt_dict = {}
-    raw_exif_dict = input_image.getexif()
-    for key, val in raw_exif_dict.items():
+    for key, val in input_image._getexif().items():  # type: ignore
         if key in ExifTags.TAGS:
             rebuilt_dict[ExifTags.TAGS[key]] = val
     return rebuilt_dict
 
 
-def extract_date_str(input_image: Image, input_filename: str) -> str:
-    # Try to extract date from EXIF data - only if user wants date display
+def extract_date_str(input_image: Image.Image) -> Union[str, None]:
     date_str = None
     if rebuilt_exif_data := extract_exif_data(input_image):
         for date_field in EXIF_DATE_FIELD_NAMES:
@@ -63,16 +67,16 @@ def extract_date_str(input_image: Image, input_filename: str) -> str:
     return date_str
 
 
-def apply_date_to_image(input_image: Image, enhanced_image: Image,
-                        args: argparse.Namespace, input_filename: str) -> None:
-
-    # If date was found and user wants to show it, add it to the image BEFORE quantization
-    if date_str := extract_date_str(input_image, input_filename):
+def apply_date_to_image(input_image: Image.Image, enhanced_image: Image.Image,
+                        args: argparse.Namespace,) -> None:
+    # If date was found, add it to the image BEFORE quantization
+    if date_str := extract_date_str(input_image):
         # Create a drawing context
         draw = ImageDraw.Draw(enhanced_image)
         # Try to use a default font, fallback to default if not available
         try:
             # Use smaller font size as requested
+            font: Union[ImageFont.FreeTypeFont, ImageFont.ImageFont]
             try:
                 font = ImageFont.truetype("arial.ttf", size=args.date_size)
             except Exception:
@@ -127,7 +131,7 @@ def apply_date_to_image(input_image: Image, enhanced_image: Image,
         try:
             # For newer Pillow versions that support rounded_rectangle
             rect_draw.rounded_rectangle(
-                [(0, 0), (rect_width - 1, rect_height - 1)],
+                ((0, 0), (rect_width - 1, rect_height - 1)),
                 fill=bg_color + (200,),  # Add alpha for semi-transparency
                 radius=corner_radius,
             )
@@ -135,17 +139,17 @@ def apply_date_to_image(input_image: Image, enhanced_image: Image,
             # Fallback for older Pillow versions - draw rectangle and circles for corners
             # Draw main rectangle
             rect_draw.rectangle(
-                [
+                (
                     (corner_radius, 0),
                     (rect_width - corner_radius - 1, rect_height - 1),
-                ],
+                ),
                 fill=bg_color + (200,),
             )
             rect_draw.rectangle(
-                [
+                (
                     (0, corner_radius),
                     (rect_width - 1, rect_height - corner_radius - 1),
-                ],
+                ),
                 fill=bg_color + (200,),
             )
 
@@ -199,15 +203,16 @@ def main():
     args = parse_args()
 
     # Create pic/ subfolder if it doesn't exist
-    OUTPUT_DIR = "pic"
-    if not os.path.exists(OUTPUT_DIR):
-        os.makedirs(OUTPUT_DIR)
+    output_dir = os.path.join(args.disk_path, PICTURE_SUBFOLDER)
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir
+)
     else:
         if args.delete_old_images:
             # remove all files in this directory
-            for filename in os.listdir(OUTPUT_DIR):
+            for filename in os.listdir(output_dir):
                 try:
-                    os.unlink(os.path.join(OUTPUT_DIR, filename))
+                    os.unlink(os.path.join(output_dir, filename))
                 except Exception as e:
                     print('Failed to delete %s. Reason: %s' % (filename, e))
 
@@ -369,8 +374,7 @@ def main():
             enhanced_image = enhanced_image.filter(ImageFilter.SHARPEN)
 
             if args.show_date:
-                apply_date_to_image(input_image, enhanced_image, args,
-                                    input_filename)
+                apply_date_to_image(input_image, enhanced_image, args)
 
             # Create a palette object with exact display colors
             # (Black, White, Green, Blue, Red, Yellow)
@@ -394,7 +398,8 @@ def main():
 
             # Save output image to pic/ subfolder with sequentially numbered filename
             sequential_name = f"{counter:06d}.bmp"  # Format as 000001.bmp
-            output_filename = os.path.join(OUTPUT_DIR, sequential_name)
+            output_filename = os.path.join(output_dir
+    , sequential_name)
             quantized_image.save(output_filename)
 
             # Add to list of converted files
@@ -418,7 +423,7 @@ def main():
 
     # Write the list of converted files to fileList.txt
     if converted_files:
-        with open("fileList.txt", "w") as f:
+        with open(os.path.join(args.disk_path, "fileList.txt"), "w") as f:
             for file in converted_files:
                 f.write(f"{file}\n")
         pbar.write(f"Created fileList.txt with {len(converted_files)} entries")
