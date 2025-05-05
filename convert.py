@@ -2,13 +2,14 @@
 
 from typing import Any, Union
 import argparse
-import glob
 import mimetypes
 import os
 import sys
 
 from PIL import Image, ImageOps, ImageEnhance, ImageFilter, ImageDraw, ImageFont, ExifTags
 from tqdm import tqdm
+import pillow_heif  # type: ignore
+
 
 EXIF_DATE_FIELD_NAMES = ["DateTimeOriginal", "DateTimeDigitized", "DateTime", "XPDateTaken"]
 PICTURE_SUBFOLDER = "pic"
@@ -36,18 +37,6 @@ def parse_args():
     parser.add_argument('--photos-path', default='.',
                         help='Directory where photos are located')
     return parser.parse_args()
-
-
-def has_heic_support() -> bool:
-    # Try to import pillow-heif for HEIC support
-    try:
-        import pillow_heif  # type: ignore
-        pillow_heif.register_heif_opener()
-        return True
-    except ImportError:
-        print("Warning: pillow-heif not installed. HEIC files will not be processed.")
-        print("To enable HEIC support, install with: pip install pillow-heif")
-    return False
 
 
 def extract_exif_data(input_image: Image.Image) -> dict[str, Any]:
@@ -130,63 +119,13 @@ def apply_date_to_image(input_image: Image.Image, enhanced_image: Image.Image,
         rect_draw = ImageDraw.Draw(rounded_rect)
 
         # Draw the rectangle with rounded corners
-        # Use try/except for compatibility with older Pillow versions
-        try:
-            # For newer Pillow versions that support rounded_rectangle
-            rect_draw.rounded_rectangle(
-                ((0, 0), (rect_width - 1, rect_height - 1)),
-                fill=bg_color + (200,),  # Add alpha for semi-transparency
-                radius=corner_radius,
-            )
-        except AttributeError:
-            # Fallback for older Pillow versions - draw rectangle and circles for corners
-            # Draw main rectangle
-            rect_draw.rectangle(
-                (
-                    (corner_radius, 0),
-                    (rect_width - corner_radius - 1, rect_height - 1),
-                ),
-                fill=bg_color + (200,),
-            )
-            rect_draw.rectangle(
-                (
-                    (0, corner_radius),
-                    (rect_width - 1, rect_height - corner_radius - 1),
-                ),
-                fill=bg_color + (200,),
-            )
+        rect_draw.rounded_rectangle(
+            ((0, 0), (rect_width - 1, rect_height - 1)),
+            fill=bg_color + (200,),  # Add alpha for semi-transparency
+            radius=corner_radius,
+        )
 
-            # Draw four corner circles
-            rect_draw.ellipse(
-                [(0, 0), (corner_radius * 2, corner_radius * 2)],
-                fill=bg_color + (200,),
-            )
-            rect_draw.ellipse(
-                [
-                    (rect_width - corner_radius * 2 - 1, 0),
-                    (rect_width - 1, corner_radius * 2),
-                ],
-                fill=bg_color + (200,),
-            )
-            rect_draw.ellipse(
-                [
-                    (0, rect_height - corner_radius * 2 - 1),
-                    (corner_radius * 2, rect_height - 1),
-                ],
-                fill=bg_color + (200,),
-            )
-            rect_draw.ellipse(
-                [
-                    (
-                        rect_width - corner_radius * 2 - 1,
-                        rect_height - corner_radius * 2 - 1,
-                    ),
-                    (rect_width - 1, rect_height - 1),
-                ],
-                fill=bg_color + (200,),
-            )
-
-        # Paste the rounded rectangle onto the main image
+        # Paste the rectangle onto the main image
         enhanced_image.paste(
             rounded_rect, (int(rect_x), int(rect_y)), rounded_rect
         )
@@ -204,6 +143,7 @@ def apply_date_to_image(input_image: Image.Image, enhanced_image: Image.Image,
 
 def main():
     mimetypes.init()
+    pillow_heif.register_heif_opener()
     args = parse_args()
 
     # Create pic/ subfolder if it doesn't exist
@@ -395,13 +335,12 @@ def main():
 
             # Perform quantization on the enhanced image (including the date text)
             quantized_image = enhanced_image.quantize(
-                dither=args.dithering_algorithm, palette=pal_image
-            ).convert("RGB")
+                dither=args.dithering_algorithm,
+                palette=pal_image).convert("RGB")
 
             # Save output image to pic/ subfolder with sequentially numbered filename
             sequential_name = f"{counter:06d}.bmp"  # Format as 000001.bmp
-            output_filename = os.path.join(output_dir
-    , sequential_name)
+            output_filename = os.path.join(output_dir , sequential_name)
             quantized_image.save(output_filename)
 
             # Add to list of converted files
