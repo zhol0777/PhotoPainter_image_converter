@@ -1,10 +1,13 @@
 # encoding: utf-8
 
 import argparse
+import concurrent.futures
 import mimetypes
-import sys
+from dataclasses import dataclass
+from os import cpu_count
 from pathlib import Path
-from typing import Any, Union
+from sys import exit
+from typing import Any, Optional, Union
 
 from PIL import ExifTags, Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont, ImageOps
 from pillow_heif import register_heif_opener  # type: ignore
@@ -15,9 +18,17 @@ HARDCODED_PICTURE_SUBFOLDER = "pic"
 HARDCODED_MANIFEST_FILENAME = "fileList.txt"
 
 
+@dataclass
+class ProcessImageResult:
+    output_path: Optional[Path]
+    input_filename: str
+    success: bool
+    error: Optional[Exception]
+
+
 def parse_args():
-    parser = argparse.ArgumentParser(description="Prepare images in working directory for display "
-                                                 "on WaveShare PhotoPaper.")
+    parser = argparse.ArgumentParser(
+        description="Prepare images in working directory for display on WaveShare PhotoPaper.")
     parser.add_argument("--orientation", choices=["portrait", "landscape", "both"],
                         default="both", help="(default: both)")
     parser.add_argument("-icv", "--image-conversion-mode", choices=["scale", "cut"], default="cut",
@@ -32,16 +43,16 @@ def parse_args():
     parser.add_argument("--date-color", choices=["black", "blue", "green", "red"], default="blue")
     parser.add_argument("--date-size", type=int, default=10, help="(default: 10)")
     parser.add_argument("--delete-old-images", action="store_true", default=False)
-    parser.add_argument("--disk-path", default=".",
-                        help="Where to place output files (sd card is recommended)")
-    parser.add_argument("--photos-path", default=".",
+    parser.add_argument("--input-path", default=".",
                         help="Directory where photos are located")
+    parser.add_argument("--output-path", default=".",
+                        help="Where to place output files (path to sd card root is recommended)")
     return parser.parse_args()
 
 
 def extract_exif_data(input_image: Image.Image) -> dict[str, Any]:
     """Assign human-readable keys to replace EXIF magic numbers """
-    rebuilt_dict = {}
+    rebuilt_dict: dict[str, Any] = {}
     if exif := input_image._getexif():  # type: ignore
         for key, val in exif.items():  # type: ignore
             if key in ExifTags.TAGS:
@@ -62,10 +73,11 @@ def extract_date_str(input_image: Image.Image) -> Union[str, None]:
 
 def apply_date_to_image(input_image: Image.Image, modified_image: Image.Image,
                         args: argparse.Namespace) -> None:
+    args.date_size = int(args.date_size)
     # If date was found, add it to the image BEFORE quantization
     if date_str := extract_date_str(input_image):
         # Create a drawing context
-        draw = ImageDraw.Draw(modified_image)
+        draw: ImageDraw.ImageDraw = ImageDraw.Draw(modified_image)
         # Try to use a default font, fallback to default if not available
         try:
             # Use smaller font size as requested
@@ -95,8 +107,8 @@ def apply_date_to_image(input_image: Image.Image, modified_image: Image.Image,
         rect_x = modified_image.width - rect_width - 10
         rect_y = modified_image.height - rect_height - 10
 
-        # Set background color based on user preference - define BEFORE using it
-        bg_color = (0, 0, 128)  # Default to dark blue
+        # Set background color based on user preference
+        bg_color: tuple[int, int, int]
         match args.date_color:
             case "black":
                 bg_color = (0, 0, 0)
@@ -106,6 +118,8 @@ def apply_date_to_image(input_image: Image.Image, modified_image: Image.Image,
                 bg_color = (0, 80, 0)
             case "red":
                 bg_color = (128, 0, 0)
+            case _:
+                bg_color = (0, 0, 128)  # Default to dark blue
 
         # Create rounded rectangle for background
         # Use smaller corner radius for smaller height
@@ -122,7 +136,7 @@ def apply_date_to_image(input_image: Image.Image, modified_image: Image.Image,
         # Draw the rectangle with rounded corners
         rect_draw.rounded_rectangle(
             ((0, 0), (rect_width - 1, rect_height - 1)),
-            fill=bg_color + (200,),  # Add alpha for semi-transparency
+            fill=(*bg_color, 200),  # Add alpha for semi-transparency
             radius=corner_radius,
         )
 
@@ -143,7 +157,7 @@ def apply_date_to_image(input_image: Image.Image, modified_image: Image.Image,
 
 
 def filter_images_based_on_orientation(image_files: list[Path], orientation: str) -> list[Path]:
-    filtered_files = []
+    filtered_files: list[Path] = []
     skipped_file_count = 0
 
     print(f"\nFiltering images for {orientation} orientation...")
@@ -188,7 +202,7 @@ def filter_images_based_on_orientation(image_files: list[Path], orientation: str
         )
     else:
         print(f"No {orientation} images found")
-        sys.exit(1)
+        exit(1)
     return filtered_files
 
 
@@ -212,6 +226,8 @@ def correct_rotation(input_image: Image.Image) -> Image.Image:
                               Image.Transpose.ROTATE_270]
         case 8:
             transpositions = [Image.Transpose.ROTATE_90]
+        case _:
+            transpositions = []
     for transposition in transpositions:
         input_image = input_image.transpose(transposition)
     return input_image
@@ -239,13 +255,115 @@ def scale_input_image(input_image: Image.Image, width: int, target_width: int,
     return modified_image
 
 
+def create_base_image(input_filename: Path, args: argparse.Namespace) -> Image.Image:
+    # Read input image
+    input_image = Image.open(input_filename)
+
+    input_image = correct_rotation(input_image)
+
+    # Get the original image size
+    width, height = input_image.size
+
+    # Specified target size
+    # Set dimensions based on the actual image orientation
+    if width > height:
+        # This is a landscape image
+        target_width, target_height = 800, 480
+    else:
+        # This is a portrait image
+        target_width, target_height = 480, 800
+
+    if args.image_conversion_mode == "scale":
+        modified_image = scale_input_image(input_image, width, target_width,
+                                            height, target_height)
+    elif args.image_conversion_mode == "cut":
+        box = (0, 0, width, height)
+
+        modified_image = ImageOps.pad(
+            input_image.crop(box),
+            size=(target_width, target_height),
+            color=(255, 255, 255),
+            centering=(0.5, 0.5),
+        )
+    else:
+        raise ValueError(f"Unknown image conversion mode: {args.image_conversion_mode}")
+    if args.show_date:
+        apply_date_to_image(input_image, modified_image, args)
+    input_image.close()
+    return modified_image
+
+
+def enhance_image(image: Image.Image, args: argparse.Namespace) -> Image.Image:
+    # Apply enhancements (brightness, contrast and saturation)
+    image = ImageEnhance.Brightness(image).enhance(args.brightness)
+    image = ImageEnhance.Contrast(image).enhance(args.contrast)
+    image = ImageEnhance.Color(image).enhance(args.saturation)
+
+    # Add edge enhancement
+    image = image.filter(ImageFilter.EDGE_ENHANCE)
+
+    # Add noise reduction
+    image = image.filter(ImageFilter.SMOOTH)
+
+    # Add sharpening for better detail visibility
+    image = image.filter(ImageFilter.SHARPEN)
+
+    # Create a palette object with exact display colors
+    # (Black, White, Green, Blue, Red, Yellow)
+    pal_image = Image.new("P", (1, 1))
+    pal_image.putpalette(
+        (
+            0, 0, 0,        # Black
+            255, 255, 255,  # White
+            0, 255, 0,      # Green
+            0, 0, 255,      # Blue
+            255, 0, 0,      # Red
+            255, 255, 0,    # Yellow
+        ) 
+        + (0, 0, 0) * 246
+    )
+
+    # Perform quantization on the enhanced image (including the date text)
+    image = image.quantize(
+        dither=args.dithering_algorithm,
+        palette=pal_image).convert("RGB")
+    return image
+
+
+def process_image(input_filename: Path, counter: int, args: argparse.Namespace,
+                  output_dir: Path) -> ProcessImageResult:
+    try:
+        base_image = create_base_image(input_filename, args)
+        modified_image = enhance_image(base_image, args)
+        base_image.close()
+
+        sequential_name = f"{counter:06d}.bmp"
+        output_filename = output_dir / sequential_name
+        modified_image.save(output_filename)
+        modified_image.close()
+
+        return ProcessImageResult(
+            output_path=Path(HARDCODED_PICTURE_SUBFOLDER) / sequential_name,
+            input_filename=Path(input_filename).name,
+            success=True,
+            error=None
+        )
+    except Exception as exc:
+        return ProcessImageResult(
+            output_path=None,
+            input_filename=Path(input_filename).name,
+            success=False,
+            error=exc
+        )
+
+
 def main():
     mimetypes.init()
     register_heif_opener()
     args = parse_args()
 
     # Create pic/ subfolder if it doesn"t exist
-    output_dir = Path(args.disk_path) / HARDCODED_PICTURE_SUBFOLDER
+    output_dir = Path(args.output_path) / HARDCODED_PICTURE_SUBFOLDER
     if not output_dir.exists():
         output_dir.mkdir(parents=True)
     elif args.delete_old_images:
@@ -257,8 +375,8 @@ def main():
                 print("Failed to delete %s. Reason: %s" % (filename, e))
 
     # Get all image files in current directory
-    image_files = []
-    for entry in Path(args.photos_path).iterdir():
+    image_files: list[Path] = []
+    for entry in Path(args.input_path).iterdir():
         if entry.is_file():
             if guessed_type := mimetypes.guess_type(entry.name)[0]:
                 if "image" in guessed_type:
@@ -266,122 +384,42 @@ def main():
 
     if not image_files:
         print("No image files found in the current directory")
-        sys.exit(1)
+        exit(1)
 
     # Filter images by orientation if needed
     if args.orientation != "both":
         image_files = filter_images_based_on_orientation(image_files, args.orientation)
 
     # Process each image
-    converted_files = []
-    counter = 1
+    converted_files: list[Path] = []
 
     # Create a progress bar to show conversion progress
     pbar = tqdm(total=len(image_files), desc="Converting images", unit=" image")
 
-    for input_filename in image_files:
-        try:
-            # Read input image
-            input_image = Image.open(input_filename)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=cpu_count()) as executor:
+        futures: list[concurrent.futures.Future[ProcessImageResult]] = []
+        for idx, input_filename in enumerate(image_files, start=1):
+            future = executor.submit(process_image, input_filename, idx, args, output_dir)
+            futures.append(future)
 
-            input_image = correct_rotation(input_image)
-
-            # Get the original image size
-            width, height = input_image.size
-
-            # Specified target size
-            # Set dimensions based on the actual image orientation
-            if width > height:
-                # This is a landscape image
-                target_width, target_height = 800, 480
-            else:
-                # This is a portrait image
-                target_width, target_height = 480, 800
-
-            if args.image_conversion_mode == "scale":
-                modified_image = scale_input_image(input_image, width, target_width,
-                                                   height, target_height)
-            elif args.image_conversion_mode == "cut":
-                box = (0, 0, width, height)
-
-                modified_image = ImageOps.pad(
-                    input_image.crop(box),
-                    size=(target_width, target_height),
-                    color=(255, 255, 255),
-                    centering=(0.5, 0.5),
-                )
-            else:
-                raise ValueError(f"Unknown image conversion mode: {args.image_conversion_mode}")
-            input_image.close()
-
-            # Apply enhancements (brightness, contrast and saturation)
-            modified_image = ImageEnhance.Brightness(modified_image).enhance(args.brightness)
-            modified_image = ImageEnhance.Contrast(modified_image).enhance(args.contrast)
-            modified_image = ImageEnhance.Color(modified_image).enhance(args.saturation)
-
-            # Add edge enhancement
-            modified_image = modified_image.filter(ImageFilter.EDGE_ENHANCE)
-
-            # Add noise reduction
-            modified_image = modified_image.filter(ImageFilter.SMOOTH)
-
-            # Add sharpening for better detail visibility
-            modified_image = modified_image.filter(ImageFilter.SHARPEN)
-
-            if args.show_date:
-                apply_date_to_image(input_image, modified_image, args)
-
-            # Create a palette object with exact display colors
-            # (Black, White, Green, Blue, Red, Yellow)
-            pal_image = Image.new("P", (1, 1))
-            pal_image.putpalette(
-                (
-                    0, 0, 0,        # Black
-                    255, 255, 255,  # White
-                    0, 255, 0,      # Green
-                    0, 0, 255,      # Blue
-                    255, 0, 0,      # Red
-                    255, 255, 0,    # Yellow
-                ) 
-                + (0, 0, 0) * 246
-            )
-
-            # Perform quantization on the enhanced image (including the date text)
-            quantized_image = modified_image.quantize(
-                dither=args.dithering_algorithm,
-                palette=pal_image).convert("RGB")
-            modified_image.close()
-
-            # Save output image to pic/ subfolder with sequentially numbered filename
-            sequential_name = f"{counter:06d}.bmp"  # Format as 000001.bmp
-            output_filename = output_dir / sequential_name
-            quantized_image.save(output_filename)
-
-            # Add to list of converted files
-            converted_files.append(output_filename)
-
-            # Update progress instead of printing
+        for future in concurrent.futures.as_completed(futures):
+            process_image_result: ProcessImageResult = future.result()
+            if process_image_result.success and process_image_result.output_path:
+                converted_files.append(process_image_result.output_path)
+            elif process_image_result.error:
+                pbar.write(
+                    f"Error processing {process_image_result.input_filename}: "
+                    f"{process_image_result.error}")
+                raise Exception(process_image_result.error)
             pbar.update(1)
-            pbar.set_postfix(file=Path(input_filename).name, status="Success")
 
-            # Increment counter for next file
-            counter += 1
-        except Exception as e:
-            # Show errors even with progress bar, but use pbar.write for cleaner output
-            pbar.update(1)
-            pbar.set_postfix(file=Path(input_filename).name, status="Error")
-            pbar.write(f"Error processing {input_filename}: {e}")
-            raise
-
-    # Close the progress bar
     pbar.close()
 
     # Write the list of converted files to fileList.txt
     if converted_files:
-        manifest_path = Path(args.disk_path) / HARDCODED_MANIFEST_FILENAME
+        manifest_path = Path(args.output_path) / HARDCODED_MANIFEST_FILENAME
         with manifest_path.open("w", encoding="utf-8") as f:
-            for file in converted_files:
-                f.write(f"{file}\n")
+            f.write("\n".join(str(file) for file in converted_files))
         pbar.write(f"Created {HARDCODED_MANIFEST_FILENAME} with {len(converted_files)} entries")
 
 

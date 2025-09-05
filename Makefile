@@ -6,4 +6,4 @@ install:
 
 lint:
 	ruff check convert.py --config test/ruff.toml
-	mypy .
+	mypy convert.py --check-untyped-defs

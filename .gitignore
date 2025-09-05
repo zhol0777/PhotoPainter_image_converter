@@ -5,8 +5,7 @@
 .DS_Store
 fileList.txt
 
-build/
-dist/
 pic/
 
 *.jpeg
+*.bmp
